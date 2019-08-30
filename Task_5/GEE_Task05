@@ -1,0 +1,181 @@
+// Aim: Estimation of LST in South Spain / North Marokko
+
+// 1 - Uploading Data
+var StudyAreaBIG = geometry; // Geometry Shape
+var StudyAreasmall = geometry2; // smaller geometry to export, download and display later 
+
+var dataset_1 = ee.ImageCollection('LANDSAT/LC08/C01/T1_RT') //Raster
+                  .filterDate("2019-01-01", "2019-01-30")
+                  .filterBounds(StudyAreasmall);
+var LSAT08_11_Jan = dataset_1.select('B11');
+var LSAT08_10_Jan = dataset_1.select('B10');
+var LSAT08_05_Jan = dataset_1.select('B5');
+var LSAT08_04_Jan = dataset_1.select('B4');
+var LSAT08_03_Jan = dataset_1.select('B3');
+var LSAT08_02_Jan = dataset_1.select('B2');
+
+var dataset_2 = ee.ImageCollection('LANDSAT/LC08/C01/T1_RT')
+                  .filterDate("2019-06-01", "2019-06-30")
+                  .filterBounds(StudyAreasmall);
+var LSAT08_11_June = dataset_2.select('B11');
+var LSAT08_10_June = dataset_2.select('B10');
+var LSAT08_05_June = dataset_2.select('B5');
+var LSAT08_04_June = dataset_2.select('B4');
+var LSAT08_03_June = dataset_2.select('B3');
+var LSAT08_02_June = dataset_2.select('B2');
+
+// RGB Image
+var dataset_1_mean = dataset_1.mean();
+var imageRGB_Jan = dataset_1_mean.visualize({bands: ['B4', 'B3', 'B2'], min: 6000, max: 20000});
+//print(imageRGB_Jan);
+var dataset_2_mean = dataset_2.mean();
+var imageRGB_June = dataset_2_mean.visualize({bands: ['B4', 'B3', 'B2'], min: 6000, max: 20000});
+//print(imageRGB_June);
+
+// Processing: Calc mean, to generate one value per Jan & June Raster
+var meanLSAT08_11_Jan = ee.Image(LSAT08_11_Jan.reduce(ee.Reducer.mean()));
+var meanLSAT08_11_June =  ee.Image(LSAT08_11_June.reduce(ee.Reducer.mean()));
+var meanLSAT08_10_Jan = ee.Image(LSAT08_10_Jan.reduce(ee.Reducer.mean()));
+var meanLSAT08_10_June =  ee.Image(LSAT08_10_June.reduce(ee.Reducer.mean()));
+var meanLSAT08_05_Jan = ee.Image(LSAT08_05_Jan.reduce(ee.Reducer.mean()));
+var meanLSAT08_05_June =  ee.Image(LSAT08_05_June.reduce(ee.Reducer.mean()));
+var meanLSAT08_04_Jan = ee.Image(LSAT08_04_Jan.reduce(ee.Reducer.mean()));
+var meanLSAT08_04_June =  ee.Image(LSAT08_04_June.reduce(ee.Reducer.mean()));
+
+// export to Google Drive Folder: GEE_Task05
+Export.image.toDrive({image: imageRGB_June, description: 'imageRGB_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: imageRGB_Jan, description: 'imageRGB_Jan',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+// 2 - Calculating LST
+
+//// Approach 1: https://geogeek.xyz/how-to-calculate-land-surface-temperature-with-landsat-8-images.html
+// 1.1 Conversion to TOA Radiance 
+  // Lλ = ML * Qcal + AL
+var TOA_Jan = ((meanLSAT08_10_Jan).multiply(0.0003342)).add(0.1);
+var TOA_June = ((meanLSAT08_10_June).multiply(0.0003342)).add(0.1);
+Export.image.toDrive({image: TOA_Jan, description: 'TOA_Jan', scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: TOA_June, description: 'TOA_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+// 1.2 Conversion to Top of Atmosphere Brightness Temperature 
+  // BT = (K2 / (ln (K1 / L) + 1)) − 273.15 in °C (Math.log() = ln())
+
+var frac_Jan = ee.Image(774.8853).divide(TOA_Jan).add(1);
+var frac_June = ee.Image(774.8853).divide(TOA_June).add(1);
+var ln_Jan = frac_Jan.log();
+var ln_June = frac_June.log();
+var BT_Jan_Celsius = (ee.Image(1321.0789).divide(ln_Jan)).subtract(273.15);
+var BT_June_Celsius = (ee.Image(1321.0789).divide(ln_June)).subtract(273.15);
+Export.image.toDrive({image: BT_Jan_Celsius, description: 'BT_Jan_Celsius', scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: BT_June_Celsius, description: 'BT_June_Celsius',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+// 1.3 NDVI
+  // NDVI = Float(Band 5 (NIR) – Band 4 (RED)) / Float(Band 5 + Band 4)
+var NDVI_Jan = (meanLSAT08_05_Jan.subtract(meanLSAT08_04_Jan)).divide(meanLSAT08_05_Jan.add(meanLSAT08_04_Jan));
+var NDVI_June = (meanLSAT08_05_June.subtract(meanLSAT08_04_June)).divide(meanLSAT08_05_June.add(meanLSAT08_04_June));
+Export.image.toDrive({image: NDVI_Jan, description: 'NDVI_Jan', scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: NDVI_June, description: 'NDVI_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+// 1.4.- Calculate the proportion of vegetation Pv
+var NDVImax_Jan = NDVI_Jan.reduceRegion({
+  reducer: ee.Reducer.max(),
+  geometry: geometry2, // set whatever geometry you like to get the maximum NDVI value from
+  scale: 30,
+  maxPixels: 1e9});
+print(NDVImax_Jan); // you can cross-check if you like
+var NDVImin_Jan = NDVI_Jan.reduceRegion({
+  reducer: ee.Reducer.min(),
+  geometry: geometry2, // set whatever geometry you like to get the maximum NDVI value from
+  scale: 30,
+  maxPixels: 1e9});
+print(NDVImin_Jan); // Cross-check True
+var NDVImax_June = NDVI_June.reduceRegion({
+  reducer: ee.Reducer.max(),
+  geometry: geometry2, // set whatever geometry you like to get the maximum NDVI value from
+  scale: 30,
+  maxPixels: 1e9});
+print(NDVImax_June); // Cross-check True
+var NDVImin_June = NDVI_June.reduceRegion({
+  reducer: ee.Reducer.min(),
+  geometry: geometry2, // set whatever geometry you like to get the maximum NDVI value from
+  scale: 30,
+  maxPixels: 1e9});
+print(NDVImin_June); // 
+
+// value must be passed on as number to calculate with it
+var NDVImax_Jan_img = 0.5535589898584433;
+var NDVImin_Jan_img = -0.15428179949760223;
+var NDVImax_June_img = 0.6171196936161747;
+var NDVImin_June_img = -0.2206732158335741;
+
+  // Pv = Square ((NDVI – NDVImin) / (NDVImax – NDVImin))
+var Pv_nom_Jan = NDVI_Jan.subtract(ee.Image.constant(NDVImin_Jan_img));
+var Pv_denom_Jan = ee.Image(NDVImax_Jan_img).subtract(ee.Image(NDVImin_Jan_img));
+var Pv_Jan = (Pv_nom_Jan.divide(Pv_denom_Jan));
+var Pv_Jan_Final = Pv_Jan.pow(2);
+var Pv_nom_June = NDVI_June.subtract(ee.Image.constant(NDVImin_June_img));
+var Pv_denom_June = ee.Image(NDVImax_June_img).subtract(ee.Image(NDVImin_June_img));
+var Pv_June = (Pv_nom_June.divide(Pv_denom_June));
+var Pv_June_Final = Pv_June.pow(2);
+Export.image.toDrive({image: Pv_Jan_Final, description: 'Pv_Jan', scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: Pv_June_Final, description: 'Pv_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+// 1.5 Calculate Emissivity ε
+  // ε = 0.004 * Pv + 0.986
+var E_Jan = Pv_Jan_Final.multiply(0.004).add(0.986);
+var E_June = Pv_June_Final.multiply(0.004).add(0.986);
+Export.image.toDrive({image: E_Jan, description: 'E_Jan', scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: E_June, description: 'E_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+// 1.6 Calculate the Land Surface Temperature
+  // LST = BT / (1 + (0.00115 * BT / 1.4388) * Ln(ε))
+var LST_Jan_ln = E_Jan.log();
+var LST_June_ln = E_June.log();
+var LST_Jan = BT_Jan_Celsius.divide(ee.Image(1).add((ee.Image(0.00115).multiply(BT_Jan_Celsius).divide(ee.Image(1.4388))).multiply(LST_Jan_ln)));
+var LST_June = BT_June_Celsius.divide(ee.Image(1).add((ee.Image(0.00115).multiply(BT_June_Celsius).divide(ee.Image(1.4388))).multiply(LST_June_ln)));
+Export.image.toDrive({image: LST_Jan, description: 'LST_Jan', scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: LST_June, description: 'LST_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+//// Approach 2: https://www.gis-blog.com/calculation-of-land-surface-temperature-lst-from-landsat-8-using-r/
+
+var RADIANCE_MULT_BAND = ee.Image(3.3420E-04);
+var RADIANCE_ADD_BAND = ee.Image(0.10000);
+
+  // 2.1 Calculation of TOA from DN (same as 1.1)
+var TOA_band10_Jan = RADIANCE_MULT_BAND.multiply(meanLSAT08_10_Jan).add(RADIANCE_ADD_BAND);
+var TOA_band11_Jan = RADIANCE_MULT_BAND.multiply(meanLSAT08_11_Jan).add(RADIANCE_ADD_BAND);
+
+var TOA_band10_June = RADIANCE_MULT_BAND.multiply(meanLSAT08_10_June).add(RADIANCE_ADD_BAND);
+var TOA_band11_June = RADIANCE_MULT_BAND.multiply(meanLSAT08_11_June).add(RADIANCE_ADD_BAND);
+
+  // 2.2 Conversion to At-Satellite Brightness Temperature
+
+var K1_CONSTANT_BAND_10 = ee.Image(774.8853);
+var K1_CONSTANT_BAND_11 = ee.Image(480.8883);
+var K2_CONSTANT_BAND_10 = ee.Image(1321.0789);
+var K2_CONSTANT_BAND_11 = ee.Image(1201.1442);
+
+          // LST in Kelvin
+var temp10_kelvin_fraction_Jan = K1_CONSTANT_BAND_10.divide(TOA_band10_Jan).add(1);
+var temp10_kelvin_log_Jan = temp10_kelvin_fraction_Jan.log();
+var temp10_kelvin_Jan = K2_CONSTANT_BAND_10.divide(temp10_kelvin_log_Jan);
+var temp11_kelvin_fraction_Jan = K1_CONSTANT_BAND_11.divide(TOA_band11_Jan).add(1);
+var temp11_kelvin_log_Jan = temp11_kelvin_fraction_Jan.log();
+var temp11_kelvin_Jan = K2_CONSTANT_BAND_11.divide(temp11_kelvin_log_Jan);
+
+var temp10_kelvin_fraction_June = K1_CONSTANT_BAND_10.divide(TOA_band10_June).add(1);
+var temp10_kelvin_log_June = temp10_kelvin_fraction_June.log();
+var temp10_kelvin_June = K2_CONSTANT_BAND_10.divide(temp10_kelvin_log_June);
+var temp11_kelvin_fraction_June = K1_CONSTANT_BAND_11.divide(TOA_band11_June).add(1);
+var temp11_kelvin_log_June = temp11_kelvin_fraction_June.log();
+var temp11_kelvin_June = K2_CONSTANT_BAND_11.divide(temp11_kelvin_log_June);
+
+          // LST in Celsius for Band 10 and 11
+var temp10_celsius_Jan = temp10_kelvin_Jan.subtract(273.15);
+var temp11_celsius_Jan = temp11_kelvin_Jan.subtract(273.15);
+Export.image.toDrive({image: temp10_celsius_Jan, description: 'temp10_celsius_Jan',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: temp11_celsius_Jan, description: 'temp11_celsius_Jan',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+
+var temp10_celsius_June = temp10_kelvin_June.subtract(273.15);
+var temp11_celsius_June = temp11_kelvin_June.subtract(273.15);
+Export.image.toDrive({image: temp10_celsius_June, description: 'temp10_celsius_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
+Export.image.toDrive({image: temp11_celsius_June, description: 'temp11_celsius_June',  scale: 30, fileFormat: 'GeoTIFF', region: geometry2});
